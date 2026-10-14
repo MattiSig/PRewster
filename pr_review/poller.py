@@ -116,7 +116,7 @@ class Poller(GObject.Object):
             self.app.send_notification(f"pr-{pr.key}", n)
 
     def _send_summary(self, prs: list[PullRequest]) -> None:
-        n = Gio.Notification.new(f"{len(prs)} pull requests awaiting your review")
+        n = Gio.Notification.new(f"{len(prs)} pull request{'s' if len(prs) != 1 else ''} awaiting your review")
         n.set_body("\n".join(f"{p.key}: {p.title}" for p in prs[:6]))
         n.set_icon(Gio.ThemedIcon.new(APP_ID))
         n.set_default_action("app.show")

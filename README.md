@@ -6,6 +6,20 @@ lets you read the diff and approve, request changes, or comment without
 leaving your desktop. Ships with a waybar module so the pending count lives
 in your bar, and can run headless Claude Code skills against a PR.
 
+## Screenshots
+
+![Main window](docs/screenshots/main.png)
+
+The main window: review requests on the left, the selected pull request with its changed files and highlighted diff on the right, and Comment / Request changes / Approve in the header.
+
+![Tray icon](docs/screenshots/tray.png)
+
+The tray icon with the pending-review count badge, next to the usual system icons in waybar.
+
+![Notification](docs/screenshots/notification.png)
+
+The desktop notification sent when a new review request shows up.
+
 ## How it works
 
 - **Auth**: uses the token from the `gh` CLI (`gh auth token`). No GitHub App,
@@ -14,8 +28,14 @@ in your bar, and can run headless Claude Code skills against a PR.
 - **Polling**: a single background process polls the GitHub search API every
   `poll_interval` seconds (default 120), sends a desktop notification for each
   new request, and writes `~/.cache/pr-review/status.json`.
-- **Waybar**: `pr-review-waybar` reads that file and prints module JSON. The app
-  sends `SIGRTMIN+11` to waybar after each poll so the count updates instantly.
+- **Tray**: the app registers a StatusNotifierItem (works with waybar's `tray`
+  module, KDE, and other SNI hosts). The icon gets a red count badge when
+  reviews are pending, the tooltip lists them, left click opens the app, middle
+  click refreshes, and the right-click menu lists the PRs plus Open / Refresh /
+  Quit. Set `tray = false` to disable.
+- **Waybar module (alternative)**: `pr-review-waybar` reads the status file and
+  prints module JSON with the count as text. The app sends `SIGRTMIN+11` to
+  waybar after each poll so it updates instantly.
 - **Window**: closing the window hides it; polling continues. Clicking the
   waybar module, a notification, or running `pr-review` again brings it back.
 
@@ -38,8 +58,13 @@ the next launch). `./install.sh --uninstall` removes them.
 
 ### Waybar
 
-In `~/.config/waybar/config.jsonc` add `"custom/pr-review"` to a modules list
-and define it:
+With the tray icon (default) you only need waybar's `tray` module in a modules
+list. On Omarchy the tray sits inside the `group/tray-expander` hover drawer;
+replace that entry with `"tray"` in `modules-right` if you want it always
+visible.
+
+If you prefer a text count in the bar instead, add `"custom/pr-review"` to a
+modules list and define it:
 
 ```jsonc
 "custom/pr-review": {

@@ -346,6 +346,9 @@ class ClaudeRun(GObject.Object):
                 raise AIError("Cancelled")
             cmd = [binary, "-p", self.prompt, "--output-format", "stream-json", "--verbose",
                    "--include-partial-messages", "--no-session-persistence",
+                   # Only the reviewer's own settings: the checkout is the PR author's and
+                   # could otherwise contribute .claude/settings.json hooks and permissions.
+                   "--setting-sources", "user",
                    "--permission-mode", self.cfg.permission_mode, "--max-turns", str(self.cfg.max_turns)]
             if not self.cfg.mcp:
                 cmd.append("--strict-mcp-config")

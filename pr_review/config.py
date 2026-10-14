@@ -46,6 +46,9 @@ waybar_signal = 11
 # Maximum number of pull requests to fetch per poll (1-100).
 max_results = 50
 
+# Show a system tray icon (StatusNotifierItem) with a count badge and menu.
+tray = true
+
 [ai]
 # Headless Claude Code runs. Each run checks the PR head out into a scratch
 # worktree under ~/.cache/pr-review/worktrees and runs `claude -p` there.
@@ -139,6 +142,7 @@ class Config:
     notify: bool = True
     waybar_signal: int = 11
     max_results: int = 50
+    tray: bool = True
     ai: AIConfig = field(default_factory=AIConfig)
 
     @classmethod
@@ -155,7 +159,7 @@ class Config:
             data = tomllib.loads(CONFIG_FILE.read_text())
         except (OSError, tomllib.TOMLDecodeError):
             return cfg
-        for key in ("poll_interval", "query", "include_drafts", "notify", "waybar_signal", "max_results"):
+        for key in ("poll_interval", "query", "include_drafts", "notify", "waybar_signal", "max_results", "tray"):
             if key in data and isinstance(data[key], type(getattr(cfg, key))):
                 setattr(cfg, key, data[key])
         cfg.poll_interval = max(30, int(cfg.poll_interval))
