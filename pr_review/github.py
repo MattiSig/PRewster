@@ -1,0 +1,252 @@
+"""Thin GitHub client: token discovery, GraphQL search, REST files and reviews."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+import requests
+
+API = "https://api.github.com"
+USER_AGENT = "pr-review-gtk/0.1"
+
+
+class GitHubError(Exception):
+    """Any failure talking to GitHub."""
+
+
+class AuthError(GitHubError):
+    """No usable token, or the token was rejected."""
+
+
+@dataclass
+class PullRequest:
+    repo: str
+    number: int
+    title: str
+    url: str
+    author: str
+    author_avatar: str
+    is_draft: bool
+    created_at: datetime
+    updated_at: datetime
+    additions: int
+    deletions: int
+    changed_files: int
+    review_decision: str | None
+    mergeable: str
+    head_ref: str
+    base_ref: str
+    body: str
+    labels: list[tuple[str, str]] = field(default_factory=list)
+    ci_state: str | None = None
+    head_sha: str = ""
+    reviewers: list[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        return f"{self.repo}#{self.number}"
+
+    @property
+    def owner(self) -> str:
+        return self.repo.split("/", 1)[0]
+
+    @property
+    def name(self) -> str:
+        return self.repo.split("/", 1)[1]
+
+
+@dataclass
+class ChangedFile:
+    filename: str
+    status: str
+    additions: int
+    deletions: int
+    patch: str | None
+    previous_filename: str | None = None
+    blob_url: str = ""
+
+
+SEARCH_QUERY = """
+query($q: String!, $n: Int!) {
+  viewer { login }
+  search(query: $q, type: ISSUE, first: $n) {
+    issueCount
+    nodes {
+      ... on PullRequest {
+        number title url isDraft createdAt updatedAt
+        additions deletions changedFiles reviewDecision mergeable
+        headRefName baseRefName bodyText
+        author { login avatarUrl }
+        repository { nameWithOwner }
+        labels(first: 10) { nodes { name color } }
+        commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+        reviewRequests(first: 20) {
+          nodes { requestedReviewer { ... on User { login } ... on Team { name } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def discover_token() -> str:
+    """Use GITHUB_TOKEN / GH_TOKEN if set, otherwise ask the gh CLI."""
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = os.environ.get(name, "").strip()
+        if token:
+            return token
+    gh = shutil.which("gh")
+    if not gh:
+        raise AuthError("No GITHUB_TOKEN set and the gh CLI is not installed.")
+    try:
+        proc = subprocess.run([gh, "auth", "token"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AuthError(f"Could not run gh auth token: {exc}") from exc
+    token = proc.stdout.strip()
+    if proc.returncode != 0 or not token:
+        raise AuthError("gh is not logged in. Run: gh auth login")
+    return token
+
+
+class GitHubClient:
+    def __init__(self, token: str | None = None):
+        self._token = token
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": USER_AGENT,
+        })
+        self.login: str | None = None
+
+    # -- auth -------------------------------------------------------------
+
+    def _ensure_token(self) -> None:
+        if self._token is None:
+            self._token = discover_token()
+            self._session.headers["Authorization"] = f"Bearer {self._token}"
+
+    def reset_token(self) -> None:
+        self._token = None
+        self._session.headers.pop("Authorization", None)
+
+    # -- low level --------------------------------------------------------
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        self._ensure_token()
+        kwargs.setdefault("timeout", 30)
+        try:
+            resp = self._session.request(method, url, **kwargs)
+        except requests.RequestException as exc:
+            raise GitHubError(f"Network error: {exc}") from exc
+        if resp.status_code == 401:
+            self.reset_token()
+            raise AuthError("GitHub rejected the token (401). Run: gh auth login")
+        if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
+            raise GitHubError("GitHub API rate limit exceeded; try again later.")
+        if resp.status_code >= 400:
+            detail = ""
+            try:
+                detail = resp.json().get("message", "")
+            except ValueError:
+                pass
+            raise GitHubError(f"GitHub returned {resp.status_code} {detail}".strip())
+        return resp
+
+    def graphql(self, query: str, variables: dict) -> dict:
+        resp = self._request("POST", f"{API}/graphql", json={"query": query, "variables": variables})
+        data = resp.json()
+        if data.get("errors"):
+            msg = "; ".join(e.get("message", "?") for e in data["errors"])
+            raise GitHubError(f"GraphQL error: {msg}")
+        return data["data"]
+
+    def rest(self, method: str, path: str, **kwargs) -> requests.Response:
+        return self._request(method, f"{API}{path}", **kwargs)
+
+    def fetch_bytes(self, url: str) -> bytes:
+        return self._request("GET", url).content
+
+    # -- high level -------------------------------------------------------
+
+    def list_review_requests(self, query: str, max_results: int = 50) -> list[PullRequest]:
+        data = self.graphql(SEARCH_QUERY, {"q": query, "n": max_results})
+        self.login = data["viewer"]["login"]
+        prs: list[PullRequest] = []
+        for node in data["search"]["nodes"]:
+            if not node or "number" not in node:
+                continue
+            commits = node.get("commits", {}).get("nodes") or []
+            commit = commits[0]["commit"] if commits else {}
+            rollup = commit.get("statusCheckRollup") or {}
+            author = node.get("author") or {}
+            reviewers = []
+            for rr in (node.get("reviewRequests", {}).get("nodes") or []):
+                who = rr.get("requestedReviewer") or {}
+                reviewers.append(who.get("login") or who.get("name") or "?")
+            prs.append(PullRequest(
+                repo=node["repository"]["nameWithOwner"],
+                number=node["number"],
+                title=node["title"],
+                url=node["url"],
+                author=author.get("login", "ghost"),
+                author_avatar=author.get("avatarUrl", ""),
+                is_draft=bool(node.get("isDraft")),
+                created_at=_parse_time(node["createdAt"]),
+                updated_at=_parse_time(node["updatedAt"]),
+                additions=node.get("additions", 0),
+                deletions=node.get("deletions", 0),
+                changed_files=node.get("changedFiles", 0),
+                review_decision=node.get("reviewDecision"),
+                mergeable=node.get("mergeable", "UNKNOWN"),
+                head_ref=node.get("headRefName", ""),
+                base_ref=node.get("baseRefName", ""),
+                body=node.get("bodyText") or "",
+                labels=[(l["name"], l["color"]) for l in (node.get("labels", {}).get("nodes") or [])],
+                ci_state=rollup.get("state"),
+                head_sha=commit.get("oid", ""),
+                reviewers=reviewers,
+            ))
+        prs.sort(key=lambda p: p.updated_at, reverse=True)
+        return prs
+
+    def list_files(self, repo: str, number: int, max_files: int = 1000) -> list[ChangedFile]:
+        files: list[ChangedFile] = []
+        page = 1
+        while len(files) < max_files:
+            resp = self.rest("GET", f"/repos/{repo}/pulls/{number}/files",
+                             params={"per_page": 100, "page": page})
+            chunk = resp.json()
+            for item in chunk:
+                files.append(ChangedFile(
+                    filename=item["filename"],
+                    status=item.get("status", "modified"),
+                    additions=item.get("additions", 0),
+                    deletions=item.get("deletions", 0),
+                    patch=item.get("patch"),
+                    previous_filename=item.get("previous_filename"),
+                    blob_url=item.get("blob_url", ""),
+                ))
+            if len(chunk) < 100:
+                break
+            page += 1
+        return files
+
+    def submit_review(self, repo: str, number: int, event: str, body: str = "") -> dict:
+        """event is APPROVE, REQUEST_CHANGES or COMMENT."""
+        payload: dict = {"event": event}
+        if body.strip():
+            payload["body"] = body.strip()
+        elif event != "APPROVE":
+            raise GitHubError("A comment is required for this review type.")
+        resp = self.rest("POST", f"/repos/{repo}/pulls/{number}/reviews", json=payload)
+        return resp.json()
