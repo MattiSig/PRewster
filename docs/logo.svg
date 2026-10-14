@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="216" viewBox="4 16 128 108">
+  <g id="rooster">
+    <g fill="none" stroke-width="11" stroke-linecap="round">
+      <path d="M50 76 Q 30 54 26 22" stroke="#e11d48"/>
+      <path d="M50 79 Q 24 66 12 38" stroke="#7c3aed"/>
+      <path d="M50 83 Q 20 82 10 60" stroke="#0d9488"/>
+      <path d="M52 87 Q 22 98 16 88" stroke="#2563eb"/>
+    </g>
+    <g fill="none" stroke="#ea580c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M60 103 L58 118 M52 118 L66 118"/>
+      <path d="M72 103 L74 118 M68 118 L82 118"/>
+    </g>
+    <ellipse cx="66" cy="83" rx="31" ry="24" fill="#1e293b"/>
+    <path d="M56 82 Q 70 70 90 86 Q 72 96 56 82 Z" fill="#334155"/>
+    <path d="M84 72 L96 50" stroke="#1e293b" stroke-width="20" stroke-linecap="round"/>
+    <circle cx="98" cy="46" r="15" fill="#1e293b"/>
+    <g fill="#e11d48">
+      <circle cx="89" cy="33" r="6"/><circle cx="98" cy="28" r="6.5"/><circle cx="107" cy="33" r="6"/>
+      <ellipse cx="98" cy="35" rx="13" ry="6"/>
+    </g>
+    <ellipse cx="108" cy="61" rx="4.5" ry="7" fill="#e11d48"/>
+    <path d="M111 44 L126 49 L111 54 Z" fill="#ea580c"/>
+    <circle cx="102" cy="44" r="4" fill="#ffffff"/><circle cx="103" cy="44" r="2" fill="#1e293b"/>
+  </g>
+</svg>

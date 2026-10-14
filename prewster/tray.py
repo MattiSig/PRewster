@@ -8,14 +8,22 @@ from __future__ import annotations
 
 import logging
 import math
+from importlib import resources
 
 import cairo
+import gi
 from gi.repository import Gio, GLib
+
+try:
+    gi.require_version("Rsvg", "2.0")
+    from gi.repository import Rsvg
+except (ValueError, ImportError):  # librsvg typelib missing: fall back to the drawn glyph
+    Rsvg = None
 
 from .config import APP_ID, APP_NAME
 from .github import PullRequest
 
-log = logging.getLogger("pr_review.tray")
+log = logging.getLogger("prewster.tray")
 
 WATCHER = "org.kde.StatusNotifierWatcher"
 ITEM_PATH = "/StatusNotifierItem"
@@ -121,8 +129,68 @@ def _rounded_rect(cr: cairo.Context, x: float, y: float, w: float, h: float, r: 
     cr.close_path()
 
 
+_svg_handle = None
+
+
+def _icon_handle():
+    """The packaged rooster SVG, loaded once, or None if librsvg is unavailable."""
+    global _svg_handle
+    if _svg_handle is None and Rsvg is not None:
+        try:
+            with resources.as_file(resources.files("prewster").joinpath("icons", f"{APP_ID}.svg")) as path:
+                _svg_handle = Rsvg.Handle.new_from_file(str(path))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not load tray SVG: %s", exc)
+            _svg_handle = False
+    return _svg_handle or None
+
+
+def draw_badge(cr: cairo.Context, size: int, count: int) -> None:
+    """Red count badge, drawn in 128-unit coordinates (caller scales)."""
+    cx, cy, r = 98, 30, 26
+    cr.new_sub_path()
+    cr.arc(cx, cy, r + 5, 0, 2 * math.pi)
+    cr.set_source_rgb(1, 1, 1)
+    cr.fill()
+    cr.new_sub_path()
+    cr.arc(cx, cy, r, 0, 2 * math.pi)
+    cr.set_source_rgb(0.878, 0.106, 0.141)
+    cr.fill()
+    if size >= 22:
+        label = str(count) if count < 100 else "99+"
+        cr.set_source_rgb(1, 1, 1)
+        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(38 if len(label) == 1 else 30)
+        ext = cr.text_extents(label)
+        cr.move_to(cx - ext.width / 2 - ext.x_bearing, cy + ext.height / 2)
+        cr.show_text(label)
+
+
 def draw_icon(cr: cairo.Context, size: int, count: int, muted: bool = False) -> None:
-    """Pull-request glyph on a blue tile, 128-unit design scaled to `size`."""
+    """The app icon at `size` pixels with an optional count badge."""
+    handle = _icon_handle()
+    if handle is not None:
+        rect = Rsvg.Rectangle()
+        rect.x = rect.y = 0
+        rect.width = rect.height = size
+        if muted:
+            cr.push_group()
+            handle.render_document(cr, rect)
+            cr.pop_group_to_source()
+            cr.paint_with_alpha(0.45)
+        else:
+            handle.render_document(cr, rect)
+        if count > 0:
+            cr.save()
+            cr.scale(size / 128.0, size / 128.0)
+            draw_badge(cr, size, count)
+            cr.restore()
+        return
+    _draw_glyph(cr, size, count, muted)
+
+
+def _draw_glyph(cr: cairo.Context, size: int, count: int, muted: bool = False) -> None:
+    """Fallback: pull-request glyph on a tile, 128-unit design scaled to `size`."""
     cr.scale(size / 128.0, size / 128.0)
     gradient = cairo.LinearGradient(0, 8, 0, 120)
     if muted:
@@ -157,23 +225,7 @@ def draw_icon(cr: cairo.Context, size: int, count: int, muted: bool = False) -> 
     cr.stroke()
 
     if count > 0:
-        cx, cy, r = 98, 30, 26
-        cr.new_sub_path()
-        cr.arc(cx, cy, r + 5, 0, 2 * math.pi)
-        cr.set_source_rgb(1, 1, 1)
-        cr.fill()
-        cr.new_sub_path()
-        cr.arc(cx, cy, r, 0, 2 * math.pi)
-        cr.set_source_rgb(0.878, 0.106, 0.141)
-        cr.fill()
-        if size >= 22:
-            label = str(count) if count < 100 else "99+"
-            cr.set_source_rgb(1, 1, 1)
-            cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            cr.set_font_size(38 if len(label) == 1 else 30)
-            ext = cr.text_extents(label)
-            cr.move_to(cx - ext.width / 2 - ext.x_bearing, cy + ext.height / 2)
-            cr.show_text(label)
+        draw_badge(cr, size, count)
 
 
 def render_pixmaps(count: int, muted: bool = False) -> list[tuple[int, int, bytes]]:

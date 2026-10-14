@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import requests
 
 API = "https://api.github.com"
-USER_AGENT = "pr-review-gtk/0.1"
+USER_AGENT = "prewster/0.1"
 
 
 class GitHubError(Exception):

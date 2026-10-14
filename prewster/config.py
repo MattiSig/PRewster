@@ -7,11 +7,11 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_ID = "dev.rewster.PRReview"
-APP_NAME = "PR Review"
+APP_ID = "dev.rewster.PRewster"
+APP_NAME = "PRewster"
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "pr-review"
-CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pr-review"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "prewster"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "prewster"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 STATUS_FILE = CACHE_DIR / "status.json"
 
@@ -25,7 +25,7 @@ DEFAULT_ALLOWED_TOOLS = [
 DEFAULT_SEARCH_ROOTS = ["~/product", "~/personal", "~/Projects", "~/work", "~/src", "~/code", "~/dev", "~/hr"]
 
 DEFAULT_CONFIG = """\
-# PR Review configuration. Restart the app after editing.
+# PRewster configuration. Restart the app after editing.
 
 # Seconds between GitHub polls.
 poll_interval = 120
@@ -51,7 +51,7 @@ tray = true
 
 [ai]
 # Headless Claude Code runs. Each run checks the PR head out into a scratch
-# worktree under ~/.cache/pr-review/worktrees and runs `claude -p` there.
+# worktree under ~/.cache/prewster/worktrees and runs `claude -p` there.
 claude = "claude"
 
 # Permission mode for the run: "dontAsk" denies anything not in allowed_tools,
@@ -80,7 +80,7 @@ mcp = false
 search_roots = ["~/product", "~/personal", "~/Projects", "~/work", "~/src", "~/code", "~/dev", "~/hr"]
 
 # Explicit checkout locations, used before the scan. Repos not found anywhere
-# are cloned into ~/.cache/pr-review/repos.
+# are cloned into ~/.cache/prewster/repos.
 [ai.repos]
 # "owner/repo" = "~/src/repo"
 

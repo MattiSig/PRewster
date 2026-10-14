@@ -1,0 +1,27 @@
+# Maintainer: Matthías Sigurbjörnsson
+pkgname=prewster
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native GTK4 monitor for GitHub review requests: tray icon, notifications, in-app diffs, headless Claude Code skills"
+arch=(any)
+url="https://github.com/MattiSig/PRewster"
+license=(MIT)
+depends=(python python-gobject python-cairo python-requests gtk4 libadwaita gtksourceview5 librsvg github-cli)
+optdepends=('claude-code: run Claude Code skills on a pull request'
+            'waybar: tray icon or bar module')
+makedepends=(python-build python-installer python-wheel python-setuptools)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/MattiSig/PRewster/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "PRewster-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "PRewster-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 data/dev.rewster.PRewster.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 prewster/icons/dev.rewster.PRewster.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+}

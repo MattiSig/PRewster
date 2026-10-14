@@ -71,7 +71,7 @@ class Application(Adw.Application):
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
-        logging.basicConfig(level=logging.DEBUG if os.environ.get("PR_REVIEW_DEBUG") else logging.WARNING,
+        logging.basicConfig(level=logging.DEBUG if os.environ.get("PREWSTER_DEBUG") else logging.WARNING,
                             format="%(asctime)s %(name)s %(levelname)s %(message)s")
         self.config = Config.load()
         self.client = GitHubClient()
@@ -102,7 +102,7 @@ class Application(Adw.Application):
                 self.tray = TrayIcon(self)
                 self.poller.connect("updated", lambda _p, prs, err: self.tray.update(prs, err))
             except Exception as exc:  # noqa: BLE001 - the tray is optional
-                logging.getLogger("pr_review").warning("tray icon unavailable: %s", exc)
+                logging.getLogger("prewster").warning("tray icon unavailable: %s", exc)
         self.poller.start()
 
     def do_activate(self) -> None:

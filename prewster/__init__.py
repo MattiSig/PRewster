@@ -1,4 +1,4 @@
-"""PR Review: a native GTK4/libadwaita app that watches GitHub review requests."""
+"""PRewster: a native GTK4/libadwaita app that watches GitHub review requests."""
 
 import gi
 

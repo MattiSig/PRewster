@@ -164,7 +164,7 @@ def ensure_repo(index: RepoIndex, pr: PullRequest, log) -> Path:
 
 
 def prepare_worktree(repo_path: Path, pr: PullRequest, log) -> Path:
-    ref = f"refs/pr-review/{pr.number}"
+    ref = f"refs/prewster/{pr.number}"
     log(f"Fetching PR #{pr.number} head into {repo_path}")
     git(repo_path, "fetch", "--no-tags", "--quiet", "origin", f"+refs/pull/{pr.number}/head:{ref}")
     wt = WORKTREES / pr.repo.replace("/", "__") / str(pr.number)
@@ -180,7 +180,7 @@ def prepare_worktree(repo_path: Path, pr: PullRequest, log) -> Path:
 
 
 def cleanup_worktrees() -> int:
-    """Remove every scratch worktree and the refs/pr-review/* refs. Returns count removed."""
+    """Remove every scratch worktree and the refs/prewster/* refs. Returns count removed."""
     removed = 0
     if not WORKTREES.exists():
         return 0
@@ -203,7 +203,7 @@ def cleanup_worktrees() -> int:
         if main:
             try:
                 git(main, "worktree", "prune")
-                for line in git(main, "for-each-ref", "--format=%(refname)", "refs/pr-review/").splitlines():
+                for line in git(main, "for-each-ref", "--format=%(refname)", "refs/prewster/").splitlines():
                     git(main, "update-ref", "-d", line.strip())
             except AIError:
                 pass

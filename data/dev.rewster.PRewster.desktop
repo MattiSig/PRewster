@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=PR Review
+Name=PRewster
 GenericName=Code Review
 Comment=GitHub pull requests awaiting your review
-Exec=pr-review
-Icon=dev.rewster.PRReview
+Exec=prewster
+Icon=dev.rewster.PRewster
 Terminal=false
 Categories=Development;RevisionControl;
 Keywords=github;pull request;review;diff;
 StartupNotify=true
-StartupWMClass=dev.rewster.PRReview
+StartupWMClass=dev.rewster.PRewster

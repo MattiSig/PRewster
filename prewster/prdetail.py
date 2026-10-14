@@ -27,7 +27,7 @@ STATUS_LETTER = {
 }
 
 _avatar_cache: dict[str, Gdk.Texture] = {}
-log = logging.getLogger("pr_review.detail")
+log = logging.getLogger("prewster.detail")
 
 
 def _badge(text: str, css: str) -> Gtk.Label:

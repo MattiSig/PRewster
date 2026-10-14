@@ -11,12 +11,12 @@ from .prdetail import PRDetailView
 from .prlist import PRRow
 from .util import humanize
 
-log = logging.getLogger("pr_review.window")
+log = logging.getLogger("prewster.window")
 
 
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="PR Review", default_width=1320, default_height=860)
+        super().__init__(application=app, title="PRewster", default_width=1320, default_height=860)
         self.app = app
         self.set_icon_name(app.get_application_id())
 
@@ -37,7 +37,7 @@ class MainWindow(Adw.ApplicationWindow):
         menu.append("Open on GitHub", "win.open-github")
         menu.append("Edit configuration", "app.open-config")
         menu.append("Clean up Claude worktrees", "app.cleanup-worktrees")
-        menu.append("About PR Review", "app.about")
+        menu.append("About PRewster", "app.about")
         menu.append("Quit", "app.quit")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, primary=True))
         sidebar.add_top_bar(header)
@@ -68,7 +68,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.content_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         placeholder = Adw.ToolbarView()
         placeholder.add_top_bar(Adw.HeaderBar())
-        placeholder.set_content(Adw.StatusPage(icon_name="dev.rewster.PRReview", title="Select a pull request",
+        placeholder.set_content(Adw.StatusPage(icon_name="dev.rewster.PRewster", title="Select a pull request",
                                                description="Pick a review request from the list to see its changes."))
         self.content_stack.add_named(placeholder, "placeholder")
         self.detail = PRDetailView(app.client, app.ai)
@@ -172,7 +172,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.app.poller.refresh()
 
     def _on_close_request(self, *_args) -> bool:
-        # Keep polling in the background; the waybar module or `pr-review` brings it back.
+        # Keep polling in the background; the waybar module or `prewster` brings it back.
         self.set_visible(False)
         return True
 
