@@ -11,7 +11,7 @@ optdepends=('claude-code: run Claude Code skills on a pull request'
             'waybar: tray icon or bar module')
 makedepends=(python-build python-installer python-wheel python-setuptools)
 source=("$pkgname-$pkgver.tar.gz::https://github.com/MattiSig/PRewster/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('d17a9272d42d3475a26698c393173ed0f3c041520d174682d28d6dfa2e7a276f')
 
 build() {
   cd "PRewster-$pkgver"
