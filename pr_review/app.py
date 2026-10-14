@@ -15,6 +15,7 @@ from .ai import AIService, cleanup_worktrees
 from .config import APP_ID, APP_NAME, CONFIG_FILE, Config
 from .github import GitHubClient
 from .poller import Poller
+from .tray import TrayIcon
 from .window import MainWindow
 
 CSS = """
@@ -76,6 +77,7 @@ class Application(Adw.Application):
         self.client = GitHubClient()
         self.poller = Poller(self, self.client, self.config)
         self.ai = AIService(self.config.ai)
+        self.tray: TrayIcon | None = None
 
         provider = Gtk.CssProvider()
         provider.load_from_string(CSS)
@@ -95,6 +97,12 @@ class Application(Adw.Application):
         self.set_accels_for_action("window.close", ["<Control>w"])
 
         self.hold()  # Keep running after the window is hidden.
+        if self.config.tray:
+            try:
+                self.tray = TrayIcon(self)
+                self.poller.connect("updated", lambda _p, prs, err: self.tray.update(prs, err))
+            except Exception as exc:  # noqa: BLE001 - the tray is optional
+                logging.getLogger("pr_review").warning("tray icon unavailable: %s", exc)
         self.poller.start()
 
     def do_activate(self) -> None:

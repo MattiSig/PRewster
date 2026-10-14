@@ -111,7 +111,10 @@ class MainWindow(Adw.ApplicationWindow):
         for row in self.list:
             if isinstance(row, PRRow) and row.pr.key == key:
                 log.debug("show_pr %s: selecting row", key)
-                self.list.select_row(row)
+                if row.is_selected():
+                    self._on_row_selected(self.list, row)  # select_row would not re-fire
+                else:
+                    self.list.select_row(row)
                 self.split.set_show_content(True)
                 return True
         log.debug("show_pr %s: not in list (%d rows)", key, len(list(self.list)))
@@ -150,7 +153,10 @@ class MainWindow(Adw.ApplicationWindow):
                     restored = True
                     break
         if not restored:
+            # A focused ListBox auto-selects the first appended row; keep the
+            # selection and the content pane in agreement.
             log.debug("updated: selection not restored, showing placeholder")
+            self.list.unselect_all()
             self.content_stack.set_visible_child_name("placeholder")
 
     def _on_row_selected(self, _list, row: PRRow | None) -> None:
