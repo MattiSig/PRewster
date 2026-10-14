@@ -24,6 +24,15 @@ def esc(text: str) -> str:
     return GLib.markup_escape_text(text or "")
 
 
+def plural(count: int, noun: str) -> str:
+    """Return "<count> <noun>" with a trailing "s" unless count is exactly 1.
+
+    Good enough for the nouns the app uses ("pull request", "file", "check");
+    anything irregular should be spelled out by the caller instead.
+    """
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
 def ci_badge(state: str | None) -> tuple[str, str]:
     """Return (label, css class) for a statusCheckRollup state."""
     return {

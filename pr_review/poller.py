@@ -12,6 +12,7 @@ from gi.repository import Gio, GLib, GObject
 
 from .config import APP_ID, CACHE_DIR, STATUS_FILE, Config
 from .github import GitHubClient, GitHubError, PullRequest
+from .util import plural
 
 
 def on_main(fn, *args):
@@ -116,7 +117,7 @@ class Poller(GObject.Object):
             self.app.send_notification(f"pr-{pr.key}", n)
 
     def _send_summary(self, prs: list[PullRequest]) -> None:
-        n = Gio.Notification.new(f"{len(prs)} pull requests awaiting your review")
+        n = Gio.Notification.new(f"{plural(len(prs), 'pull request')} awaiting your review")
         n.set_body("\n".join(f"{p.key}: {p.title}" for p in prs[:6]))
         n.set_icon(Gio.ThemedIcon.new(APP_ID))
         n.set_default_action("app.show")
