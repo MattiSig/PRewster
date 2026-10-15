@@ -15,7 +15,7 @@ from pathlib import Path
 
 from gi.repository import GObject
 
-from .config import CACHE_DIR, AIAction, AIConfig
+from .config import CACHE_DIR, CONFIG_FILE, AIAction, AIConfig
 from .github import PullRequest
 from .poller import on_main
 
@@ -51,8 +51,19 @@ BUILTIN = [
 ]
 
 
+# Where the Claude Code installers put the binary. Desktop sessions (autostart,
+# app launchers) often start without ~/.local/bin on PATH.
+CLAUDE_DIRS = ("~/.local/bin", "~/.claude/local", "~/.npm-global/bin", "~/.bun/bin")
+CLAUDE_MISSING = ("Claude Code CLI not found on PATH. Set claude = \"/path/to/claude\" under [ai] in "
+                  f"{str(CONFIG_FILE).replace(str(Path.home()), '~', 1)} and restart PRewster.")
+
+
 def claude_binary(cfg: AIConfig) -> str | None:
-    return shutil.which(os.path.expanduser(cfg.claude))
+    name = os.path.expanduser(cfg.claude)
+    found = shutil.which(name)
+    if found or os.sep in name:
+        return found
+    return shutil.which(name, path=os.pathsep.join(os.path.expanduser(d) for d in CLAUDE_DIRS))
 
 
 def render_prompt(template: str, pr: PullRequest) -> str:
@@ -337,7 +348,7 @@ class ClaudeRun(GObject.Object):
         try:
             binary = claude_binary(self.cfg)
             if not binary:
-                raise AIError("Claude Code CLI not found. Install it and make sure `claude` is on PATH.")
+                raise AIError(CLAUDE_MISSING)
             repo = ensure_repo(self.index, self.pr, log)
             if self._cancel:
                 raise AIError("Cancelled")

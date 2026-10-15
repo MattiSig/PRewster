@@ -7,7 +7,7 @@ import threading
 
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
-from .ai import AIService, Skill, load_last_run
+from .ai import CLAUDE_MISSING, AIService, Skill, load_last_run
 from .aipanel import AIPanel
 from .diffview import DiffView
 from .github import ChangedFile, GitHubClient, GitHubError, PullRequest
@@ -133,7 +133,7 @@ class PRDetailView(Gtk.Box):
         self.claude_btn.set_child(claude_content)
         if not ai.available:
             self.claude_btn.set_sensitive(False)
-            self.claude_btn.set_tooltip_text("Claude Code CLI not found on PATH")
+            self.claude_btn.set_tooltip_text(CLAUDE_MISSING)
         else:
             self.claude_btn.set_tooltip_text("Run a Claude Code skill on this pull request")
         header.pack_start(self.claude_btn)
