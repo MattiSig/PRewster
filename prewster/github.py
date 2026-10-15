@@ -15,7 +15,11 @@ USER_AGENT = "prewster/0.1"
 
 
 class GitHubError(Exception):
-    """Any failure talking to GitHub."""
+    """Any failure talking to GitHub. status is the HTTP status, when there was one."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class AuthError(GitHubError):
@@ -57,6 +61,15 @@ class PullRequest:
     @property
     def name(self) -> str:
         return self.repo.split("/", 1)[1]
+
+
+@dataclass
+class Inbox:
+    """One read of the notifications inbox."""
+    changed: bool                 # False when GitHub answered 304 Not Modified
+    last_modified: str | None     # send back as If-Modified-Since next time
+    poll_interval: int            # seconds GitHub asks clients to wait (X-Poll-Interval)
+    threads: dict[str, str] = field(default_factory=dict)  # pull request thread id -> updated_at
 
 
 @dataclass
@@ -159,7 +172,7 @@ class GitHubClient:
                 detail = resp.json().get("message", "")
             except ValueError:
                 pass
-            raise GitHubError(f"GitHub returned {resp.status_code} {detail}".strip())
+            raise GitHubError(f"GitHub returned {resp.status_code} {detail}".strip(), resp.status_code)
         return resp
 
     def graphql(self, query: str, variables: dict) -> dict:
@@ -177,6 +190,26 @@ class GitHubClient:
         return self._request("GET", url).content
 
     # -- high level -------------------------------------------------------
+
+    def notifications(self, last_modified: str | None = None) -> Inbox:
+        """Conditional read of the notifications inbox: the newest 50 threads, read or not.
+
+        Made for polling: a 304 (nothing changed since last_modified) does not count
+        against the rate limit. Only pull request threads are returned. Raises
+        GitHubError with status 403 or 404 when the token cannot read notifications
+        (fine-grained personal access tokens, for one).
+        """
+        headers = {"If-Modified-Since": last_modified} if last_modified else {}
+        resp = self.rest("GET", "/notifications", params={"all": "true", "per_page": 50}, headers=headers)
+        try:
+            interval = int(resp.headers.get("X-Poll-Interval", 60))
+        except ValueError:
+            interval = 60
+        if resp.status_code == 304:
+            return Inbox(False, last_modified, interval)
+        threads = {str(t["id"]): str(t.get("updated_at", "")) for t in resp.json()
+                   if (t.get("subject") or {}).get("type") == "PullRequest"}
+        return Inbox(True, resp.headers.get("Last-Modified") or last_modified, interval, threads)
 
     def list_review_requests(self, query: str, max_results: int = 50) -> list[PullRequest]:
         data = self.graphql(SEARCH_QUERY, {"q": query, "n": max_results})

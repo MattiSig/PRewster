@@ -1,6 +1,6 @@
 """Waybar custom-module output for PRewster.
 
-Reads the status file the app writes after every poll and prints waybar JSON.
+Reads the status file the app writes after every check and prints waybar JSON.
 Wire it up with "return-type": "json" and "signal": 11 (see README).
 """
 
@@ -27,9 +27,10 @@ def main() -> None:
         emit(ICON, "PRewster is not running\nClick to start it", "stale")
 
     age = None
-    if data.get("updated"):
+    stamp = data.get("checked") or data.get("updated")
+    if stamp:
         try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(data["updated"])).total_seconds()
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(stamp)).total_seconds()
         except ValueError:
             age = None
     interval = int(data.get("poll_interval") or 120)

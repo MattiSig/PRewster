@@ -1,8 +1,15 @@
-"""Background polling, status file for waybar, and desktop notifications."""
+"""Background polling, status file for waybar, and desktop notifications.
+
+The review-request search is the source of truth. When the notifications inbox can be
+read, it is checked every minute (unchanged checks are free) and any new or updated
+pull request thread triggers a search right away, so the regular search can slow down
+to a safety net for requests that were withdrawn or finished elsewhere.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -12,7 +19,11 @@ from gi.repository import Gio, GLib, GObject
 
 from . import sound
 from .config import APP_ID, CACHE_DIR, STATUS_FILE, Config
-from .github import GitHubClient, GitHubError, PullRequest
+from .github import GitHubClient, GitHubError, Inbox, PullRequest
+
+log = logging.getLogger("prewster.poller")
+
+INBOX_INTERVAL = 60  # never read the inbox more often than this, whatever X-Poll-Interval says
 
 
 def on_main(fn, *args):
@@ -38,28 +49,54 @@ class Poller(GObject.Object):
         self.config = config
         self.prs: list[PullRequest] = []
         self.error: str = ""
-        self.last_update: datetime | None = None
+        self.last_update: datetime | None = None  # last search
+        self.watching = False  # the notifications inbox answers and is being watched
         self._known: set[str] | None = self._load_known()
         self._busy = False
-        self._timer_id = 0
+        self._again = False  # a refresh was asked for while one was running
+        self._stopped = False
+        self._search_timer = 0
+        self._inbox_timer = 0
+        self._inbox_enabled = config.watch_notifications  # off for good after a 403/404
+        self._inbox_interval = INBOX_INTERVAL
+        self._inbox_modified: str | None = None
+        self._inbox_threads: dict[str, str] | None = None  # None until the first read
 
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
-        self.refresh()
-        self._timer_id = GLib.timeout_add_seconds(self.config.poll_interval, self._tick)
+        self._stopped = False
+        if self._inbox_enabled:
+            self._check_inbox()  # its first answer runs the first search
+        else:
+            self.refresh()
 
     def stop(self) -> None:
-        if self._timer_id:
-            GLib.source_remove(self._timer_id)
-            self._timer_id = 0
+        self._stopped = True
+        for name in ("_search_timer", "_inbox_timer"):
+            if getattr(self, name):
+                GLib.source_remove(getattr(self, name))
+                setattr(self, name, 0)
 
-    def _tick(self) -> bool:
+    @property
+    def search_interval(self) -> int:
+        return self.config.watched_poll_interval if self.watching else self.config.poll_interval
+
+    def _schedule_search(self) -> None:
+        if self._search_timer:
+            GLib.source_remove(self._search_timer)
+            self._search_timer = 0
+        if not self._stopped:
+            self._search_timer = GLib.timeout_add_seconds(self.search_interval, self._on_search_timer)
+
+    def _on_search_timer(self) -> bool:
+        self._search_timer = 0
         self.refresh()
-        return True
+        return False
 
     def refresh(self) -> None:
         if self._busy:
+            self._again = True
             return
         self._busy = True
         self.emit("polling")
@@ -91,6 +128,60 @@ class Poller(GObject.Object):
         self._write_status()
         self._signal_waybar()
         self.emit("updated", self.prs, self.error)
+        self._schedule_search()
+        if self._again:
+            self._again = False
+            self.refresh()
+
+    # -- notifications inbox ----------------------------------------------
+
+    def _check_inbox(self) -> bool:
+        self._inbox_timer = 0
+        threading.Thread(target=self._fetch_inbox, args=(self._inbox_modified,), daemon=True).start()
+        return False
+
+    def _fetch_inbox(self, last_modified: str | None) -> None:
+        try:
+            on_main(self._apply_inbox, self.client.notifications(last_modified), None)
+        except Exception as exc:  # noqa: BLE001 - a failed check only pauses watching
+            on_main(self._apply_inbox, None, exc)
+
+    def _apply_inbox(self, inbox: Inbox | None, error: Exception | None) -> None:
+        if self._stopped:
+            return
+        never_searched = self.last_update is None and not self._busy
+        if inbox is None:
+            self._set_watching(False)
+            if isinstance(error, GitHubError) and error.status in (403, 404):
+                log.warning("cannot read GitHub notifications (%s); searching every %d s instead",
+                            error, self.config.poll_interval)
+                self._inbox_enabled = False
+            else:
+                log.debug("notifications check failed, searching every %d s until it answers: %s",
+                          self.config.poll_interval, error)
+            if never_searched:
+                self.refresh()
+        else:
+            self._inbox_interval = max(INBOX_INTERVAL, inbox.poll_interval)
+            self._set_watching(True)
+            if inbox.changed:
+                seen, self._inbox_threads = self._inbox_threads, inbox.threads
+                self._inbox_modified = inbox.last_modified
+                if seen is None or any(seen.get(tid) != stamp for tid, stamp in inbox.threads.items()):
+                    log.debug("pull request activity in the notifications inbox, searching")
+                    self.refresh()
+        if self.last_update is not None and not self._busy:
+            self._write_status()  # heartbeat for the waybar module
+        if self._inbox_enabled:
+            self._inbox_timer = GLib.timeout_add_seconds(self._inbox_interval, self._check_inbox)
+
+    def _set_watching(self, watching: bool) -> None:
+        if watching == self.watching:
+            return
+        self.watching = watching
+        log.debug("watching notifications: %s, searching every %d s", watching, self.search_interval)
+        if self._search_timer:  # idle between searches: restart the wait at the new interval
+            self._schedule_search()
 
     # -- notifications ----------------------------------------------------
 
@@ -132,10 +223,15 @@ class Poller(GObject.Object):
     def _write_status(self) -> None:
         payload = {
             "updated": self.last_update.isoformat() if self.last_update else None,
+            # When this file was last written: after every search and inbox check, so the
+            # waybar module can tell a live app from a dead one. poll_interval is the gap
+            # until the next write.
+            "checked": datetime.now(timezone.utc).isoformat(),
             "count": len(self.prs),
             "error": self.error or None,
             "login": self.client.login,
-            "poll_interval": self.config.poll_interval,
+            "poll_interval": self._inbox_interval if self._inbox_enabled else self.config.poll_interval,
+            "watching_notifications": self.watching,
             "prs": [
                 {
                     "key": p.key,

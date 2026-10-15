@@ -71,9 +71,9 @@ exec-once = uwsm-app -- $HOME/.local/bin/prewster --background
 ## How it works
 
 - **Auth**: uses the token from the `gh` CLI (`gh auth token`). `GITHUB_TOKEN` or `GH_TOKEN` override it if set. Approving needs the `repo` scope, which `gh auth login` grants by default. The token lives only in memory.
-- **Polling**: a single background process polls the GitHub search API every `poll_interval` seconds (default 120), sends a desktop notification for each new request, and writes `~/.cache/prewster/status.json`.
+- **Polling**: a single background process searches GitHub for review requests, sends a desktop notification for each new one, and writes `~/.cache/prewster/status.json`. GitHub has no push channel for a user's own notifications, so instead it watches your notifications inbox: a conditional read every 60 s (the rate GitHub asks for; unchanged reads cost nothing against the rate limit), and a search as soon as a pull request thread there is new or updated, so new requests show up within about a minute. The search stays the source of truth and still runs every `watched_poll_interval` seconds (default 300) to drop requests that were withdrawn or reviewed elsewhere. If the token can't read notifications (fine-grained personal access tokens can't), or `watch_notifications = false`, it searches every `poll_interval` seconds (default 120) instead.
 - **Tray**: the app registers a StatusNotifierItem (works with waybar's `tray` module, KDE, and other SNI hosts). The icon gets a red count badge when reviews are pending, the tooltip lists them, left click opens the app, middle click refreshes, and the right-click menu lists the PRs plus Open / Refresh / Quit. Set `tray = false` to disable.
-- **Waybar module (alternative)**: `prewster-waybar` reads the status file and prints module JSON with the count as text. The app sends `SIGRTMIN+11` to waybar after each poll so it updates instantly.
+- **Waybar module (alternative)**: `prewster-waybar` reads the status file and prints module JSON with the count as text. The app sends `SIGRTMIN+11` to waybar after each search so it updates instantly.
 - **Window**: closing the window hides it; polling continues. Clicking the tray icon, a notification, or running `prewster` again brings it back.
 
 ### Waybar
@@ -133,7 +133,9 @@ Set `PREWSTER_DEBUG=1` to log list updates and runs to stderr.
 
 | key              | default                                               | meaning |
 |------------------|-------------------------------------------------------|---------|
-| `poll_interval`  | `120`                                                 | seconds between polls |
+| `poll_interval`  | `120`                                                 | seconds between searches when the notifications inbox isn't watched |
+| `watch_notifications` | `true`                                           | watch the notifications inbox and search when PR activity shows up there |
+| `watched_poll_interval` | `300`                                          | seconds between safety-net searches while the inbox is watched |
 | `query`          | `is:pr is:open review-requested:@me archived:false`   | GitHub search query |
 | `include_drafts` | `false`                                               | list draft PRs too |
 | `notify`         | `true`                                                | desktop notifications |
@@ -180,7 +182,7 @@ prewster/
   tray.py         StatusNotifierItem + DBusMenu tray icon
   poller.py       polling thread, notifications, status file, waybar signal
   sound.py        notification sound, do-not-disturb check
-  github.py       GraphQL search, REST files + reviews
+  github.py       GraphQL search, notifications inbox, REST files + reviews
   waybar.py       waybar custom-module output
   config.py       paths and config.toml
   icons/          app icon (SVG)
