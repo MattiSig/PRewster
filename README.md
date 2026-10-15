@@ -36,7 +36,7 @@ The desktop notification sent when a new review request appears. Clicking it ope
 
 ## Features
 
-- **Pings you** the moment someone requests your review: a desktop notification with a click-through to the PR, and a tray icon whose badge shows how many are waiting.
+- **Pings you** the moment someone requests your review: a desktop notification with a click-through to the PR, a rooster's crow (quiet in do-not-disturb), and a tray icon whose badge shows how many are waiting.
 - **Reads the diff natively**: per-file view, syntax highlighting by language, old/new line numbers and change markers in a gutter, keyboard navigation between files.
 - **Reviews from the app**: approve, request changes or comment without opening a browser.
 - **Runs Claude Code on the PR**: built-in code review, security review and summary actions, plus your own and the repository's skills, streamed into a panel under the diff. Output can be posted as a comment in one click.
@@ -137,11 +137,14 @@ Set `PREWSTER_DEBUG=1` to log list updates and runs to stderr.
 | `query`          | `is:pr is:open review-requested:@me archived:false`   | GitHub search query |
 | `include_drafts` | `false`                                               | list draft PRs too |
 | `notify`         | `true`                                                | desktop notifications |
+| `sound`          | `rooster`                                             | sound played with a notification: `rooster`, a path to a sound file, or `""` for none |
 | `waybar_signal`  | `11`                                                  | RTMIN signal sent to waybar (0 disables) |
 | `max_results`    | `50`                                                  | PRs fetched per poll |
 | `tray`           | `true`                                                | system tray icon |
 
 `review-requested:@me` includes team review requests. Use `user-review-requested:@me` for direct requests only.
+
+The sound plays once per poll, however many requests arrived, and is skipped while notifications are silenced (mako's `do-not-disturb` mode, dunst or swaync paused, GNOME banners off). It is played with `pw-play`, `paplay` or `canberra-gtk-play`, whichever is installed. `prewster --test-sound` plays the configured sound.
 
 The `[ai]` table configures Claude runs: `claude` (binary), `permission_mode`, `allowed_tools`, `max_turns`, `model`, `mcp`, `search_roots`, `[ai.repos]` (explicit `"owner/repo" = "~/path"` checkouts) and `[[ai.actions]]` entries with `name`, `description` and `prompt` (placeholders `{number} {repo} {title} {url} {base} {head} {author}`; a prompt starting with `/` runs that skill).
 
@@ -155,6 +158,7 @@ The `[ai]` table configures Claude runs: `claude` (binary), `permission_mode`, `
 | Submit review dialog       | Ctrl+Enter |
 | Next / previous file       | Alt+Down / Alt+Up |
 | Start hidden               | `prewster --background` |
+| Hear the crow              | `prewster --test-sound` |
 
 ## Releases
 
@@ -175,10 +179,12 @@ prewster/
   ai.py           repo lookup, PR worktrees, skill discovery, streaming claude -p runs
   tray.py         StatusNotifierItem + DBusMenu tray icon
   poller.py       polling thread, notifications, status file, waybar signal
+  sound.py        notification sound, do-not-disturb check
   github.py       GraphQL search, REST files + reviews
   waybar.py       waybar custom-module output
   config.py       paths and config.toml
   icons/          app icon (SVG)
+  sounds/         rooster crow (Ogg Vorbis)
 data/             desktop entry
 docs/             logo and screenshots
 packaging/arch/   PKGBUILD
@@ -186,4 +192,4 @@ packaging/arch/   PKGBUILD
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The rooster crow is trimmed from a public domain recording by alys on pdsounds.org ([Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Medium_rooster_crowing.ogg)).

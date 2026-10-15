@@ -40,6 +40,11 @@ include_drafts = false
 # Send a desktop notification when a new review request appears.
 notify = true
 
+# Sound played with that notification: "rooster" for the built-in crow, a path to
+# your own sound file, or "" for none. Skipped while do-not-disturb is on.
+# Try it with: prewster --test-sound
+sound = "rooster"
+
 # Real-time signal sent to waybar after each poll (pkill -RTMIN+<n> waybar).
 waybar_signal = 11
 
@@ -140,6 +145,7 @@ class Config:
     query: str = "is:pr is:open review-requested:@me archived:false"
     include_drafts: bool = False
     notify: bool = True
+    sound: str = "rooster"
     waybar_signal: int = 11
     max_results: int = 50
     tray: bool = True
@@ -159,7 +165,7 @@ class Config:
             data = tomllib.loads(CONFIG_FILE.read_text())
         except (OSError, tomllib.TOMLDecodeError):
             return cfg
-        for key in ("poll_interval", "query", "include_drafts", "notify", "waybar_signal", "max_results", "tray"):
+        for key in ("poll_interval", "query", "include_drafts", "notify", "sound", "waybar_signal", "max_results", "tray"):
             if key in data and isinstance(data[key], type(getattr(cfg, key))):
                 setattr(cfg, key, data[key])
         cfg.poll_interval = max(30, int(cfg.poll_interval))

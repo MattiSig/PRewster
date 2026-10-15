@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from gi.repository import Gio, GLib, GObject
 
+from . import sound
 from .config import APP_ID, CACHE_DIR, STATUS_FILE, Config
 from .github import GitHubClient, GitHubError, PullRequest
 
@@ -96,24 +97,21 @@ class Poller(GObject.Object):
     def _notify_new(self, prs: list[PullRequest]) -> None:
         if not self.config.notify:
             return
-        if self._known is None:
-            # First run without a cache: one summary rather than a burst.
-            if prs:
-                self._send_summary(prs)
-            return
-        new = [p for p in prs if p.key not in self._known]
+        new = prs if self._known is None else [p for p in prs if p.key not in self._known]
         if not new:
             return
-        if len(new) > 3:
+        # First run without a cache, or a burst: one summary rather than a pile of popups.
+        if self._known is None or len(new) > 3:
             self._send_summary(new)
-            return
-        for pr in new:
-            n = Gio.Notification.new(f"Review requested: {pr.title}")
-            n.set_body(f"{pr.key} by {pr.author}")
-            n.set_icon(Gio.ThemedIcon.new(APP_ID))
-            n.set_default_action_and_target("app.show-pr", GLib.Variant("s", pr.key))
-            n.add_button_with_target("Open in browser", "app.open-url", GLib.Variant("s", pr.url))
-            self.app.send_notification(f"pr-{pr.key}", n)
+        else:
+            for pr in new:
+                n = Gio.Notification.new(f"Review requested: {pr.title}")
+                n.set_body(f"{pr.key} by {pr.author}")
+                n.set_icon(Gio.ThemedIcon.new(APP_ID))
+                n.set_default_action_and_target("app.show-pr", GLib.Variant("s", pr.key))
+                n.add_button_with_target("Open in browser", "app.open-url", GLib.Variant("s", pr.url))
+                self.app.send_notification(f"pr-{pr.key}", n)
+        sound.play(self.config.sound)  # once per poll, however many arrived
 
     def _send_summary(self, prs: list[PullRequest]) -> None:
         n = Gio.Notification.new(f"{len(prs)} pull request{'s' if len(prs) != 1 else ''} awaiting your review")
