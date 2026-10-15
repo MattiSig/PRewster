@@ -27,8 +27,17 @@ DEFAULT_SEARCH_ROOTS = ["~/product", "~/personal", "~/Projects", "~/work", "~/sr
 DEFAULT_CONFIG = """\
 # PRewster configuration. Restart the app after editing.
 
-# Seconds between GitHub polls.
+# Seconds between GitHub searches for review requests (minimum 30).
 poll_interval = 120
+
+# Watch your GitHub notifications inbox and search as soon as pull request activity
+# shows up there, usually within a minute. The inbox is read as often as GitHub
+# allows (every 60 s) and unchanged reads don't count against your rate limit. While
+# it works, searches only run every watched_poll_interval seconds, to drop requests
+# that were withdrawn or reviewed elsewhere. Needs a token that can read
+# notifications: gh's own can, fine-grained tokens can't (poll_interval applies then).
+watch_notifications = true
+watched_poll_interval = 300
 
 # GitHub search query for the pull requests to track.
 # "review-requested:@me" covers direct requests and team requests.
@@ -39,6 +48,11 @@ include_drafts = false
 
 # Send a desktop notification when a new review request appears.
 notify = true
+
+# Sound played with that notification: "rooster" for the built-in crow, a path to
+# your own sound file, or "" for none. Skipped while do-not-disturb is on.
+# Try it with: prewster --test-sound
+sound = "rooster"
 
 # Real-time signal sent to waybar after each poll (pkill -RTMIN+<n> waybar).
 waybar_signal = 11
@@ -137,9 +151,12 @@ class AIConfig:
 @dataclass
 class Config:
     poll_interval: int = 120
+    watch_notifications: bool = True
+    watched_poll_interval: int = 300
     query: str = "is:pr is:open review-requested:@me archived:false"
     include_drafts: bool = False
     notify: bool = True
+    sound: str = "rooster"
     waybar_signal: int = 11
     max_results: int = 50
     tray: bool = True
@@ -159,10 +176,12 @@ class Config:
             data = tomllib.loads(CONFIG_FILE.read_text())
         except (OSError, tomllib.TOMLDecodeError):
             return cfg
-        for key in ("poll_interval", "query", "include_drafts", "notify", "waybar_signal", "max_results", "tray"):
+        for key in ("poll_interval", "watch_notifications", "watched_poll_interval", "query", "include_drafts",
+                    "notify", "sound", "waybar_signal", "max_results", "tray"):
             if key in data and isinstance(data[key], type(getattr(cfg, key))):
                 setattr(cfg, key, data[key])
         cfg.poll_interval = max(30, int(cfg.poll_interval))
+        cfg.watched_poll_interval = max(30, int(cfg.watched_poll_interval))
         cfg.max_results = min(100, max(1, int(cfg.max_results)))
         if isinstance(data.get("ai"), dict):
             cfg.ai = AIConfig.from_dict(data["ai"])

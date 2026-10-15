@@ -8,7 +8,7 @@ import sys
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from . import __version__
+from . import __version__, sound
 import threading
 
 from .ai import AIService, cleanup_worktrees
@@ -45,6 +45,8 @@ class Application(Adw.Application):
                              "Start polling without showing the window", None)
         self.add_main_option("version", ord("v"), GLib.OptionFlags.NONE, GLib.OptionArg.NONE,
                              "Print the version and exit", None)
+        self.add_main_option("test-sound", 0, GLib.OptionFlags.NONE, GLib.OptionArg.NONE,
+                             "Play the notification sound and exit", None)
         self.connect("handle-local-options", self._on_local_options)
         self._background = False
         self.window: MainWindow | None = None
@@ -58,6 +60,12 @@ class Application(Adw.Application):
         if options.contains("version"):
             print(f"{APP_NAME} {__version__}")
             return 0
+        if options.contains("test-sound"):
+            setting = Config.load().sound
+            if not setting.strip():
+                print(f'No notification sound set (sound = "" in {CONFIG_FILE}).')
+                return 0
+            return 0 if sound.play(setting, respect_dnd=False, wait=True) else 1
         if options.contains("background"):
             try:
                 self.register(None)

@@ -35,7 +35,7 @@ prewster-waybar = "prewster.waybar:main"
 packages = ["prewster"]
 
 [tool.setuptools.package-data]
-prewster = ["icons/*.svg"]
+prewster = ["icons/*.svg", "sounds/*.oga"]
 
 [tool.setuptools.dynamic]
 version = { attr = "prewster.__version__" }
