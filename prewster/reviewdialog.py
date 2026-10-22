@@ -1,4 +1,4 @@
-"""Dialog for submitting a review (approve / request changes / comment) or a Claude prompt."""
+"""Dialog for submitting a review: approve, request changes or comment."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ KINDS = {
     "APPROVE": ("Approve", "Approve pull request", "Comment (optional)", "suggested-action"),
     "REQUEST_CHANGES": ("Request changes", "Request changes", "Explain what needs to change", "destructive-action"),
     "COMMENT": ("Comment", "Leave a review comment", "Comment", "suggested-action"),
-    "PROMPT": ("Run", "Ask Claude about this pull request", "What should Claude do? It runs in a checkout of the PR branch.", "suggested-action"),
 }
 
 

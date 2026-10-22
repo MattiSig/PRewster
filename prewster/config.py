@@ -43,6 +43,14 @@ watched_poll_interval = 300
 # "review-requested:@me" covers direct requests and team requests.
 query = "is:pr is:open review-requested:@me archived:false"
 
+# Search for the "Mine" list: your own open pull requests.
+mine_query = "is:pr is:open author:@me archived:false"
+
+# The "Local" list shows checkouts under [ai] search_roots that are ahead of their
+# default branch or have uncommitted changes, touched in the last local_days days
+# (0 shows them all, however old).
+local_days = 14
+
 # Show draft pull requests in the list.
 include_drafts = false
 
@@ -90,7 +98,12 @@ model = ""
 # Load MCP servers from your Claude settings. Off keeps runs fast and cheap.
 mcp = false
 
+# Terminal for "Open in terminal", which continues a chat in interactive Claude Code.
+# Empty tries xdg-terminal-exec, $TERMINAL, then common terminals. Example: "ghostty -e"
+terminal = ""
+
 # Directories scanned (3 levels deep) for local checkouts, matched by origin URL.
+# Checkouts found here also fill the "Local" list.
 search_roots = ["~/product", "~/personal", "~/Projects", "~/work", "~/src", "~/code", "~/dev", "~/hr"]
 
 # Explicit checkout locations, used before the scan. Repos not found anywhere
@@ -122,6 +135,7 @@ class AIConfig:
     max_turns: int = 100
     model: str = ""
     mcp: bool = False
+    terminal: str = ""
     search_roots: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_ROOTS))
     repos: dict[str, str] = field(default_factory=dict)
     actions: list[AIAction] = field(default_factory=list)
@@ -129,7 +143,7 @@ class AIConfig:
     @classmethod
     def from_dict(cls, data: dict) -> "AIConfig":
         cfg = cls()
-        for key in ("claude", "permission_mode", "model"):
+        for key in ("claude", "permission_mode", "model", "terminal"):
             if isinstance(data.get(key), str):
                 setattr(cfg, key, data[key])
         if isinstance(data.get("allowed_tools"), list):
@@ -154,6 +168,8 @@ class Config:
     watch_notifications: bool = True
     watched_poll_interval: int = 300
     query: str = "is:pr is:open review-requested:@me archived:false"
+    mine_query: str = "is:pr is:open author:@me archived:false"
+    local_days: int = 14
     include_drafts: bool = False
     notify: bool = True
     sound: str = "rooster"
@@ -176,8 +192,8 @@ class Config:
             data = tomllib.loads(CONFIG_FILE.read_text())
         except (OSError, tomllib.TOMLDecodeError):
             return cfg
-        for key in ("poll_interval", "watch_notifications", "watched_poll_interval", "query", "include_drafts",
-                    "notify", "sound", "waybar_signal", "max_results", "tray"):
+        for key in ("poll_interval", "watch_notifications", "watched_poll_interval", "query", "mine_query",
+                    "local_days", "include_drafts", "notify", "sound", "waybar_signal", "max_results", "tray"):
             if key in data and isinstance(data[key], type(getattr(cfg, key))):
                 setattr(cfg, key, data[key])
         cfg.poll_interval = max(30, int(cfg.poll_interval))

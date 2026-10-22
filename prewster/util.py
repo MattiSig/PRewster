@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 
-from gi.repository import GLib
+from gi.repository import Adw, Gdk, GLib
+
+from .poller import on_main
 
 
 def humanize(dt: datetime) -> str:
@@ -50,3 +53,37 @@ def text_color_for(hex_color: str) -> str:
         return "#000000"
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     return "#000000" if luminance > 150 else "#ffffff"
+
+
+class AvatarLoader:
+    """Downloads each avatar once and sets it on the Adw.Avatar widgets that asked for it."""
+
+    def __init__(self, client):
+        self.client = client
+        self._cache: dict[str, Gdk.Texture] = {}
+        self._waiting: dict[str, list[Adw.Avatar]] = {}
+
+    def apply(self, avatar: Adw.Avatar, url: str) -> None:
+        avatar.avatar_url = url
+        avatar.set_custom_image(self._cache.get(url))
+        if not url or url in self._cache:
+            return
+        waiting = self._waiting.setdefault(url, [])
+        waiting.append(avatar)
+        if len(waiting) == 1:
+            threading.Thread(target=self._fetch, args=(url,), daemon=True).start()
+
+    def _fetch(self, url: str) -> None:
+        try:
+            data = self.client.fetch_bytes(url + ("&" if "?" in url else "?") + "s=64")
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
+        except Exception:  # noqa: BLE001 - avatars are decorative
+            texture = None
+        on_main(self._loaded, url, texture)
+
+    def _loaded(self, url: str, texture: Gdk.Texture | None) -> None:
+        if texture is not None:
+            self._cache[url] = texture
+        for avatar in self._waiting.pop(url, []):
+            if texture is not None and getattr(avatar, "avatar_url", None) == url:
+                avatar.set_custom_image(texture)

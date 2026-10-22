@@ -36,8 +36,9 @@ class SkillPicker(Gtk.Popover):
             row.set_subtitle_lines(2)
             row.skill = skill
             self.list.append(row)
-        self.list.append(self._header("Custom"))
-        row = Adw.ActionRow(title="Custom prompt…", subtitle="Type what Claude should do with this PR", activatable=True)
+        self.list.append(self._header("Chat"))
+        row = Adw.ActionRow(title="Chat with Claude…", subtitle="Ask anything, follow up, let it edit when you allow it",
+                            activatable=True)
         row.skill = None
         self.list.append(row)
 

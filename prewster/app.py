@@ -35,6 +35,16 @@ CSS = """
 .file-status { font-family: monospace; padding: 1px 6px; min-width: 10px; }
 .diff-view { font-size: 0.92em; }
 .ai-panel { background: var(--view-bg-color); }
+.viewed-check { color: var(--success-color); }
+.comment-card { padding: 10px 12px; }
+.diff-view .thread-card { font-family: initial; font-size: initial; margin: 6px 0 10px 0; }
+.thread-link { padding: 2px 6px; font-weight: 600; }
+.thread-hunk {
+  font-size: 0.85em;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
 """
 
 
@@ -92,7 +102,7 @@ class Application(Adw.Application):
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        self._add_action("refresh", lambda *_: self.poller.refresh(), accel="<Control>r")
+        self._add_action("refresh", lambda *_: self._refresh(), accel="<Control>r")
         self._add_action("quit", lambda *_: self.quit(), accel="<Control>q")
         self._add_action("show", lambda *_: self._present())
         self._add_action("show-pr", self._on_show_pr, param="s")
@@ -129,6 +139,11 @@ class Application(Adw.Application):
         self.add_action(action)
         if accel:
             self.set_accels_for_action(f"app.{name}", [accel])
+
+    def _refresh(self) -> None:
+        self.poller.refresh()
+        if self.window is not None:
+            self.window.reload()
 
     def _present(self) -> None:
         if self.window is None:

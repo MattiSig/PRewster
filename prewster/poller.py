@@ -106,7 +106,7 @@ class Poller(GObject.Object):
 
     def _fetch(self) -> None:
         try:
-            prs = self.client.list_review_requests(self.config.query, self.config.max_results)
+            prs = self.client.search_pull_requests(self.config.query, self.config.max_results)
             if not self.config.include_drafts:
                 prs = [p for p in prs if not p.is_draft]
             on_main(self._apply, prs, "")

@@ -1,17 +1,30 @@
-"""Main window: sidebar of review requests + detail pane."""
+"""Main window: collapsible sidebar (review requests, your PRs, local branches) + detail pane."""
 
 from __future__ import annotations
 
 import logging
+import threading
+from datetime import datetime, timezone
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
-from .github import PullRequest
+from . import local
+from .github import GitHubError, PullRequest
+from .poller import on_main
 from .prdetail import PRDetailView
-from .prlist import PRRow
+from .prlist import PRListPane
 from .util import humanize
 
 log = logging.getLogger("prewster.window")
+
+MODES = {"reviews": "Review requests", "mine": "My pull requests", "local": "Local branches"}
+STALE_AFTER = 60  # seconds before switching to Mine or Local reloads it
+
+
+def _changed(old: PullRequest, new: PullRequest) -> bool:
+    """For local branches: has the work moved on since it was shown?"""
+    fields = ("head_sha", "additions", "deletions", "changed_files", "updated_at")
+    return any(getattr(old, f) != getattr(new, f) for f in fields)
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -22,13 +35,13 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.toast = Adw.ToastOverlay()
         self.set_content(self.toast)
-        self.split = Adw.NavigationSplitView(min_sidebar_width=300, max_sidebar_width=440, sidebar_width_fraction=0.28)
+        self.split = Adw.OverlaySplitView(min_sidebar_width=300, max_sidebar_width=440, sidebar_width_fraction=0.28)
         self.toast.set_child(self.split)
 
         # -- sidebar --
         sidebar = Adw.ToolbarView()
         header = Adw.HeaderBar()
-        self.sidebar_title = Adw.WindowTitle(title="Review requests")
+        self.sidebar_title = Adw.WindowTitle(title=MODES["reviews"])
         header.set_title_widget(self.sidebar_title)
         self.refresh_btn = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (Ctrl+R)", action_name="app.refresh")
         header.pack_start(self.refresh_btn)
@@ -42,53 +55,61 @@ class MainWindow(Adw.ApplicationWindow):
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, primary=True))
         sidebar.add_top_bar(header)
 
-        self.list_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
-        loading = Adw.StatusPage(title="Checking GitHub…")
-        loading.set_child(Adw.Spinner())
-        self.list_stack.add_named(loading, "loading")
-        empty = Adw.StatusPage(icon_name="emblem-ok-symbolic", title="All caught up",
-                               description="No pull requests are waiting for your review.")
-        self.list_stack.add_named(empty, "empty")
-        self.error_page = Adw.StatusPage(icon_name="network-error-symbolic", title="Could not reach GitHub")
-        retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER, action_name="app.refresh")
-        retry.add_css_class("pill")
-        self.error_page.set_child(retry)
-        self.list_stack.add_named(self.error_page, "error")
-
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
-        self.list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
-        self.list.add_css_class("navigation-sidebar")
-        self.list.connect("row-selected", self._on_row_selected)
-        scroller.set_child(self.list)
-        self.list_stack.add_named(scroller, "list")
-        sidebar.set_content(self.list_stack)
-        self.split.set_sidebar(Adw.NavigationPage(child=sidebar, title="Review requests"))
+        self.panes = Adw.ViewStack(vexpand=True)
+        self.reviews = PRListPane("emblem-ok-symbolic", "All caught up", "No pull requests are waiting for your review.")
+        self.mine = PRListPane("document-edit-symbolic", "No open pull requests",
+                               "Pull requests you have open show up here, drafts included.")
+        self.local = PRListPane("folder-symbolic", "No local changes",
+                                "Checkouts under your search roots show up here while they are ahead of their "
+                                "default branch or have uncommitted changes.")
+        for name, title, pane in (("reviews", "Reviews", self.reviews), ("mine", "Mine", self.mine),
+                                  ("local", "Local", self.local)):
+            self.panes.add_titled(pane, name, title)
+            pane.connect("selected", self._on_pane_selected)
+            pane.connect("activated", lambda *_: self._close_overlay())
+        switcher = Adw.InlineViewSwitcher(stack=self.panes, homogeneous=True)
+        switcher.set_margin_start(8)
+        switcher.set_margin_end(8)
+        switcher.set_margin_bottom(6)
+        sidebar.add_top_bar(switcher)
+        sidebar.set_content(self.panes)
+        self.split.set_sidebar(sidebar)
 
         # -- content --
         self.content_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         placeholder = Adw.ToolbarView()
-        placeholder.add_top_bar(Adw.HeaderBar())
+        placeholder_header = Adw.HeaderBar()
+        placeholder_header.pack_start(self._bind_sidebar_toggle(Gtk.ToggleButton()))
+        placeholder.add_top_bar(placeholder_header)
         placeholder.set_content(Adw.StatusPage(icon_name="dev.rewster.PRewster", title="Select a pull request",
-                                               description="Pick a review request from the list to see its changes."))
+                                               description="Pick a pull request or a branch from the list to see its changes."))
         self.content_stack.add_named(placeholder, "placeholder")
         self.detail = PRDetailView(app.client, app.ai)
+        self._bind_sidebar_toggle(self.detail.sidebar_btn)
         self.detail.connect("toast", lambda _d, msg: self.show_toast(msg))
         self.detail.connect("reviewed", self._on_reviewed)
         self.content_stack.add_named(self.detail, "detail")
-        self.split.set_content(Adw.NavigationPage(child=self.content_stack, title="Pull request"))
+        self.split.set_content(self.content_stack)
 
         # Window-level actions.
         open_github = Gio.SimpleAction.new("open-github", None)
         open_github.connect("activate", lambda *_: Gtk.UriLauncher.new(
             "https://github.com/pulls/review-requested").launch(self, None, None))
         self.add_action(open_github)
+        toggle_sidebar = Gio.SimpleAction.new("toggle-sidebar", None)
+        toggle_sidebar.connect("activate", lambda *_: self.split.set_show_sidebar(not self.split.get_show_sidebar()))
+        self.add_action(toggle_sidebar)
+        app.set_accels_for_action("win.toggle-sidebar", ["F9"])
 
-        # Collapse to a single pane on narrow windows (half a 1280px screen, for example).
+        # On narrow windows (half a 1280px screen, for example) the sidebar floats over the
+        # content and closes once something is picked.
         narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 1100sp"))
         narrow.add_setter(self.split, "collapsed", True)
-        narrow.add_setter(self.detail.actions_box, "visible", False)
-        narrow.add_setter(self.detail.review_menu_btn, "visible", True)
+        narrow.connect("apply", lambda *_: self.detail.set_narrow(True))
+        narrow.connect("unapply", lambda *_: self.detail.set_narrow(False))
         self.add_breakpoint(narrow)
+        self.split.connect("notify::collapsed", self._on_collapsed)
+        self.panes.connect("notify::visible-child-name", self._on_mode_changed)
 
         self.connect("close-request", self._on_close_request)
         app.poller.connect("updated", self._on_updated)
@@ -103,70 +124,111 @@ class MainWindow(Adw.ApplicationWindow):
     def show_toast(self, message: str) -> None:
         self.toast.add_toast(Adw.Toast(title=message, timeout=4))
 
-    def selected_key(self) -> str | None:
-        row = self.list.get_selected_row()
-        return row.pr.key if isinstance(row, PRRow) else None
+    def _bind_sidebar_toggle(self, button: Gtk.ToggleButton) -> Gtk.ToggleButton:
+        button.set_icon_name("sidebar-show-symbolic")
+        button.set_tooltip_text("Show or hide the list (F9)")
+        self.split.bind_property("show-sidebar", button, "active",
+                                 GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
+        return button
+
+    def _close_overlay(self) -> None:
+        if self.split.get_collapsed():
+            self.split.set_show_sidebar(False)
+
+    def _current_pane(self) -> PRListPane:
+        return self.panes.get_visible_child()
 
     def show_pr(self, key: str) -> bool:
-        for row in self.list:
-            if isinstance(row, PRRow) and row.pr.key == key:
-                log.debug("show_pr %s: selecting row", key)
-                if row.is_selected():
-                    self._on_row_selected(self.list, row)  # select_row would not re-fire
-                else:
-                    self.list.select_row(row)
-                self.split.set_show_content(True)
-                return True
-        log.debug("show_pr %s: not in list (%d rows)", key, len(list(self.list)))
+        """Bring up a pull request from the review requests (notifications, tray menu)."""
+        self.panes.set_visible_child_name("reviews")
+        if self.reviews.select_key(key):
+            log.debug("show_pr %s: selected", key)
+            self._close_overlay()
+            return True
+        log.debug("show_pr %s: not in the list", key)
         self.show_toast(f"{key} is no longer waiting for your review")
         return False
+
+    def reload(self) -> None:
+        """Reload the visible list if it is Mine or Local (the poller keeps Reviews fresh)."""
+        name = self.panes.get_visible_child_name()
+        if name == "mine":
+            cfg = self.app.config
+            self._load(self.mine, lambda: self.app.client.search_pull_requests(cfg.mine_query, cfg.max_results))
+        elif name == "local":
+            self._load(self.local, self._find_local)
+
+    def _find_local(self) -> list[PullRequest]:
+        index = self.app.ai.index
+        index.scan()  # pick up checkouts made since the last look
+        return local.list_branches(index.all(), self.app.client.login or "", self.app.client.avatar_url,
+                                   self.app.config.local_days)
+
+    def _load(self, pane: PRListPane, fetch) -> None:
+        if pane.busy:
+            return
+        pane.busy = True
+        pane.set_loading()
+
+        def work():
+            try:
+                on_main(done, fetch(), "")
+            except (GitHubError, local.LocalError) as exc:
+                on_main(done, None, str(exc))
+            except Exception as exc:  # noqa: BLE001 - surface anything in the UI
+                on_main(done, None, f"Unexpected error: {exc!r}")
+
+        def done(items: list[PullRequest] | None, error: str) -> None:
+            pane.busy = False
+            if error and list(pane.list):
+                self.show_toast(error)
+            pane.set_items(items, error, datetime.now(timezone.utc))
+            self._update_subtitle()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_subtitle(self) -> None:
+        when = self._current_pane().updated
+        self.sidebar_title.set_subtitle(f"Updated {humanize(when)}" if when else "")
+
+    def _show_item(self, pr: PullRequest | None) -> None:
+        if pr is None:
+            self.content_stack.set_visible_child_name("placeholder")
+            return
+        current = self.detail.pr
+        if current is None or current.key != pr.key or (pr.is_local and _changed(current, pr)):
+            self.detail.show(pr)
+            self.detail.populate_picker()
+        self.content_stack.set_visible_child_name("detail")
 
     # -- signal handlers --------------------------------------------------
 
     def _on_updated(self, _poller, prs: list[PullRequest], error: str) -> None:
         self.refresh_btn.set_sensitive(True)
-        when = self.app.poller.last_update
-        self.sidebar_title.set_subtitle(f"Updated {humanize(when)}" if when else "")
-        if error and not prs:
-            self.error_page.set_description(error)
-            self.list_stack.set_visible_child_name("error")
-            return
-        if error:
+        if error and prs:
             self.show_toast(error)
+        self.reviews.set_items(prs if prs or not error else None, error, self.app.poller.last_update)
+        self._update_subtitle()
 
-        previous = self.selected_key()
-        log.debug("updated: %d prs, error=%r, previously selected %s", len(prs), error, previous)
-        self.list.remove_all()
-        for pr in prs:
-            self.list.append(PRRow(pr))
-        if not prs:
-            self.list_stack.set_visible_child_name("empty")
-            self.content_stack.set_visible_child_name("placeholder")
-            return
-        self.list_stack.set_visible_child_name("list")
+    def _on_pane_selected(self, pane: PRListPane, pr: PullRequest | None) -> None:
+        log.debug("selected: %s", pr.key if pr else None)
+        if pane is self._current_pane():
+            self._show_item(pr)
 
-        restored = False
-        if previous:
-            for row in self.list:
-                if row.pr.key == previous:
-                    self.list.select_row(row)
-                    restored = True
-                    break
-        if not restored:
-            # A focused ListBox auto-selects the first appended row; keep the
-            # selection and the content pane in agreement.
-            log.debug("updated: selection not restored, showing placeholder")
-            self.list.unselect_all()
-            self.content_stack.set_visible_child_name("placeholder")
+    def _on_mode_changed(self, *_args) -> None:
+        name = self.panes.get_visible_child_name()
+        pane = self._current_pane()
+        self.sidebar_title.set_title(MODES[name])
+        self._update_subtitle()
+        stale = pane.updated is None or (datetime.now(timezone.utc) - pane.updated).total_seconds() > STALE_AFTER
+        if pane is not self.reviews and stale:
+            self.reload()
+        self._show_item(pane.selected())
 
-    def _on_row_selected(self, _list, row: PRRow | None) -> None:
-        log.debug("row selected: %s", row.pr.key if row else None)
-        if row is None:
-            return
-        if self.detail.pr is None or self.detail.pr.key != row.pr.key:
-            self.detail.show(row.pr)
-            self.detail.populate_picker()
-        self.content_stack.set_visible_child_name("detail")
+    def _on_collapsed(self, *_args) -> None:
+        # Narrow window with nothing picked yet: show the list rather than an empty page.
+        if self.split.get_collapsed() and self.content_stack.get_visible_child_name() == "placeholder":
+            self.split.set_show_sidebar(True)
 
     def _on_reviewed(self, _detail, key: str, event: str) -> None:
         self.app.poller.refresh()
@@ -177,10 +239,7 @@ class MainWindow(Adw.ApplicationWindow):
         return True
 
     def _tick_times(self) -> bool:
-        for row in self.list:
-            if isinstance(row, PRRow):
-                row.refresh_time()
-        when = self.app.poller.last_update
-        if when:
-            self.sidebar_title.set_subtitle(f"Updated {humanize(when)}")
+        for pane in (self.reviews, self.mine, self.local):
+            pane.refresh_times()
+        self._update_subtitle()
         return True
