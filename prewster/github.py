@@ -1,4 +1,4 @@
-"""Thin GitHub client: token discovery, GraphQL search, REST files and reviews."""
+"""Thin GitHub client: token discovery, GraphQL search, REST files and reviews, comments."""
 
 from __future__ import annotations
 
@@ -62,6 +62,11 @@ class PullRequest:
     def name(self) -> str:
         return self.repo.split("/", 1)[1]
 
+    @property
+    def is_local(self) -> bool:
+        """True for a branch in a local checkout rather than a pull request on GitHub."""
+        return False
+
 
 @dataclass
 class Inbox:
@@ -81,11 +86,46 @@ class ChangedFile:
     patch: str | None
     previous_filename: str | None = None
     blob_url: str = ""
+    sha: str = ""  # the new blob; tells binary versions apart
+
+
+@dataclass
+class Comment:
+    """A conversation comment, a review, or one comment in a review thread."""
+    author: str
+    avatar: str
+    body: str
+    created_at: datetime
+    url: str
+    state: str = ""  # reviews only: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+
+
+@dataclass
+class ReviewThread:
+    """Inline comments on one line of the diff."""
+    path: str
+    line: int | None  # None once the line is gone from the current diff (outdated)
+    original_line: int | None
+    side: str  # LEFT (old file) or RIGHT (new file)
+    resolved: bool
+    outdated: bool
+    diff_hunk: str
+    comments: list[Comment]
+
+    @property
+    def created_at(self) -> datetime:
+        return self.comments[0].created_at
+
+
+@dataclass
+class Conversation:
+    comments: list[Comment]  # conversation comments and reviews, oldest first
+    threads: list[ReviewThread]
 
 
 SEARCH_QUERY = """
 query($q: String!, $n: Int!) {
-  viewer { login }
+  viewer { login avatarUrl }
   search(query: $q, type: ISSUE, first: $n) {
     issueCount
     nodes {
@@ -104,6 +144,25 @@ query($q: String!, $n: Int!) {
     }
   }
 }
+"""
+
+
+_AUTHOR = "author { login avatarUrl }"
+CONVERSATION_QUERY = f"""
+query($owner: String!, $name: String!, $number: Int!) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
+      comments(last: 100) {{ nodes {{ {_AUTHOR} bodyText createdAt url }} }}
+      reviews(last: 100) {{ nodes {{ {_AUTHOR} bodyText state submittedAt createdAt url }} }}
+      reviewThreads(last: 100) {{
+        nodes {{
+          isResolved isOutdated path line originalLine diffSide
+          comments(first: 50) {{ nodes {{ {_AUTHOR} bodyText createdAt url diffHunk }} }}
+        }}
+      }}
+    }}
+  }}
+}}
 """
 
 
@@ -140,6 +199,7 @@ class GitHubClient:
             "User-Agent": USER_AGENT,
         })
         self.login: str | None = None
+        self.avatar_url = ""
 
     # -- auth -------------------------------------------------------------
 
@@ -211,9 +271,10 @@ class GitHubClient:
                    if (t.get("subject") or {}).get("type") == "PullRequest"}
         return Inbox(True, resp.headers.get("Last-Modified") or last_modified, interval, threads)
 
-    def list_review_requests(self, query: str, max_results: int = 50) -> list[PullRequest]:
+    def search_pull_requests(self, query: str, max_results: int = 50) -> list[PullRequest]:
         data = self.graphql(SEARCH_QUERY, {"q": query, "n": max_results})
         self.login = data["viewer"]["login"]
+        self.avatar_url = data["viewer"].get("avatarUrl") or ""
         prs: list[PullRequest] = []
         for node in data["search"]["nodes"]:
             if not node or "number" not in node:
@@ -268,11 +329,45 @@ class GitHubClient:
                     patch=item.get("patch"),
                     previous_filename=item.get("previous_filename"),
                     blob_url=item.get("blob_url", ""),
+                    sha=item.get("sha") or "",
                 ))
             if len(chunk) < 100:
                 break
             page += 1
         return files
+
+    def conversation(self, repo: str, number: int) -> Conversation:
+        """Conversation comments, reviews and inline review threads (the newest 100 of each)."""
+        owner, name = repo.split("/", 1)
+        data = self.graphql(CONVERSATION_QUERY, {"owner": owner, "name": name, "number": number})
+        pr = (data.get("repository") or {}).get("pullRequest") or {}
+
+        def comment(node: dict, when: str = "createdAt") -> Comment:
+            author = node.get("author") or {}
+            return Comment(author=author.get("login", "ghost"), avatar=author.get("avatarUrl", ""),
+                           body=(node.get("bodyText") or "").strip(),
+                           created_at=_parse_time(node.get(when) or node["createdAt"]),
+                           url=node.get("url", ""), state=node.get("state", ""))
+
+        items = [comment(n) for n in (pr.get("comments") or {}).get("nodes") or [] if n]
+        for node in (pr.get("reviews") or {}).get("nodes") or []:
+            # A bare COMMENTED review only wraps inline comments, which show up as threads.
+            if node and node.get("state") != "PENDING" and (node.get("bodyText") or node.get("state") != "COMMENTED"):
+                items.append(comment(node, "submittedAt"))
+        items.sort(key=lambda c: c.created_at)
+
+        threads: list[ReviewThread] = []
+        for node in (pr.get("reviewThreads") or {}).get("nodes") or []:
+            nodes = [n for n in (node or {}).get("comments", {}).get("nodes") or [] if n]
+            if not nodes:
+                continue
+            threads.append(ReviewThread(
+                path=node["path"], line=node.get("line"), original_line=node.get("originalLine"),
+                side=node.get("diffSide") or "RIGHT", resolved=bool(node.get("isResolved")),
+                outdated=bool(node.get("isOutdated")), diff_hunk=nodes[0].get("diffHunk") or "",
+                comments=[comment(n) for n in nodes]))
+        threads.sort(key=lambda t: t.created_at)
+        return Conversation(items, threads)
 
     def submit_review(self, repo: str, number: int, event: str, body: str = "") -> dict:
         """event is APPROVE, REQUEST_CHANGES or COMMENT."""

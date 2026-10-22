@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from typing import Callable
 
-from gi.repository import Adw, Gtk, GtkSource, Pango
+from gi.repository import Adw, GLib, GObject, Gtk, GtkSource, Pango
 
-from .github import ChangedFile
+from .github import ChangedFile, ReviewThread
 
 LIGHT = {"add": "#dafbe1", "del": "#ffebe9", "hunk": "#ddf4ff", "meta": "#f6f8fa"}
 DARK = {
@@ -53,8 +54,14 @@ class DiffGutter(GtkSource.GutterRendererText):
 
 
 class DiffView(Gtk.ScrolledWindow):
-    def __init__(self):
+    __gsignals__ = {
+        # The end of the file has been on screen: scrolled down to, or it fit without scrolling.
+        "read-to-end": (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
+
+    def __init__(self, thread_widget: Callable[[ReviewThread], Gtk.Widget] | None = None):
         super().__init__(hexpand=True, vexpand=True)
+        self.thread_widget = thread_widget
         self.buffer = GtkSource.Buffer()
         self.buffer.set_highlight_matching_brackets(False)
         self.view = GtkSource.View.new_with_buffer(self.buffer)
@@ -86,6 +93,37 @@ class DiffView(Gtk.ScrolledWindow):
         Adw.StyleManager.get_default().connect("notify::dark", lambda *_: self._apply_theme())
         self._apply_theme()
 
+        # Watch for the last line coming into view. Checks wait for the text view to finish
+        # laying out the new file (a low-priority idle), or a stale size would count as read.
+        self._shown = 0  # bumped per file shown
+        self._armed = False
+        self._reported = False
+        self.get_vadjustment().connect("value-changed", self._check_end)
+        self.get_vadjustment().connect("changed", self._check_end)
+        self.view.connect("map", lambda *_: self._arm_later())
+
+    def _arm_later(self) -> None:
+        self._armed = False
+        shown = self._shown
+        GLib.idle_add(self._arm, shown, priority=GLib.PRIORITY_LOW)
+
+    def _arm(self, shown: int) -> bool:
+        if shown == self._shown and self.line_info:
+            self._armed = True
+            self._check_end()
+        return False
+
+    def _check_end(self, *_args) -> None:
+        if not self._armed or self._reported or not self.view.get_mapped():
+            return
+        visible = self.view.get_visible_rect()
+        if visible.height <= 0:
+            return
+        y, height = self.view.get_line_yrange(self.buffer.get_end_iter())
+        if y + height <= visible.y + visible.height + 1:
+            self._reported = True
+            self.emit("read-to-end")
+
     def _apply_theme(self) -> None:
         self.dark = Adw.StyleManager.get_default().get_dark()
         scheme = GtkSource.StyleSchemeManager.get_default().get_scheme("Adwaita-dark" if self.dark else "Adwaita")
@@ -97,17 +135,36 @@ class DiffView(Gtk.ScrolledWindow):
         self.view.queue_draw()
 
     def clear(self) -> None:
+        self._shown += 1
+        self._armed = False
         self.line_info = []
         self.buffer.set_language(None)
         self.buffer.set_text("")
 
-    def show_file(self, f: ChangedFile) -> None:
+    def show_file(self, f: ChangedFile, threads: list[ReviewThread] = ()) -> None:
+        """Show a file's diff, with review threads under the lines they were left on."""
+        self._shown += 1
+        self._armed = False  # until the new text is laid out; see _arm_later
+        self._reported = False
         lang = self._manager.guess_language(f.filename, None)
         self.buffer.set_language(lang)
 
         lines: list[str] = []
         kinds: list[str | None] = []
         info: list[tuple[str, int | None, int | None]] = []
+        anchored: dict[tuple[str, int], list[ReviewThread]] = {}
+        for t in threads:
+            if t.line is not None and not t.outdated:
+                anchored.setdefault((t.side, t.line), []).append(t)
+        placed: list[tuple[int, ReviewThread]] = []
+
+        def place(*spots: tuple[str, int | None]) -> None:
+            for spot in spots:
+                for thread in anchored.pop(spot, []):
+                    lines.append("")
+                    kinds.append(None)
+                    info.append(("thread", None, None))
+                    placed.append((len(lines) - 1, thread))
         meta = STATUS_TEXT.get(f.status)
         if f.status in ("renamed", "copied") and f.previous_filename:
             meta = f"{meta} from {f.previous_filename}"
@@ -132,11 +189,13 @@ class DiffView(Gtk.ScrolledWindow):
                     lines.append(raw[1:])
                     kinds.append("add")
                     info.append(("add", None, new))
+                    place(("RIGHT", new))
                     new += 1
                 elif raw.startswith("-"):
                     lines.append(raw[1:])
                     kinds.append("del")
                     info.append(("del", old, None))
+                    place(("LEFT", old))
                     old += 1
                 elif raw.startswith("\\"):
                     lines.append(raw[2:])
@@ -146,6 +205,7 @@ class DiffView(Gtk.ScrolledWindow):
                     lines.append(raw[1:] if raw.startswith(" ") else raw)
                     kinds.append(None)
                     info.append(("ctx", old, new))
+                    place(("RIGHT", new), ("LEFT", old))
                     old += 1
                     new += 1
         self.line_info = info
@@ -167,5 +227,34 @@ class DiffView(Gtk.ScrolledWindow):
                     end.forward_to_line_end()
                 self.buffer.apply_tag(self._tags[kind], start, end)
             i = j + 1
+        if self.thread_widget is not None and placed:
+            # A widget in a text view gets its minimum width, which for wrapping text is one
+            # character: give threads the visible width of the code, within reason.
+            visible = self.get_width() - self.gutter.get_width() - self.view.get_left_margin() - 32
+            width = max(360, min(860, visible)) if visible > 0 else 640
+            for index, thread in placed:
+                _ok, at = self.buffer.get_iter_at_line(index)
+                holder = Adw.Clamp(maximum_size=width, tightening_threshold=width, child=self.thread_widget(thread))
+                holder.set_size_request(width, -1)
+                self.view.add_child_at_anchor(holder, self.buffer.create_child_anchor(at))
         self.get_vadjustment().set_value(0)
         self.get_hadjustment().set_value(0)
+        self._arm_later()
+
+    def scroll_to_line(self, side: str, line: int) -> bool:
+        """Scroll to and select a line of the new (RIGHT) or old (LEFT) file, if the diff shows it."""
+        for index, (kind, old, new) in enumerate(self.line_info):
+            if (side == "LEFT" and kind in ("del", "ctx") and old == line) or \
+                    (side != "LEFT" and kind in ("add", "ctx") and new == line):
+                GLib.idle_add(self._scroll_to_index, self._shown, index, priority=GLib.PRIORITY_LOW)
+                return True
+        return False
+
+    def _scroll_to_index(self, shown: int, index: int) -> bool:
+        if shown == self._shown:
+            _ok, start = self.buffer.get_iter_at_line(index)
+            end = start.copy()
+            end.forward_to_line_end()
+            self.buffer.select_range(start, end)
+            self.view.scroll_to_iter(start, 0.0, True, 0.0, 0.3)
+        return False
